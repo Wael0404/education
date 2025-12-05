@@ -51,8 +51,23 @@ export default function Tabs() {
   const [editingMatiere, setEditingMatiere] = useState(null);
   const [editingChapitre, setEditingChapitre] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
+  const [miniJeuTypeModal, setMiniJeuTypeModal] = useState(null); // { chapitreId: number }
+  const [previewModal, setPreviewModal] = useState(null); // { chapitreId: number, gameType: string }
+  const [miniJeuData, setMiniJeuData] = useState({}); // Données du mini jeu en cours de création
   // Mémorise la dernière valeur sauvegardée en DB pour chaque niveau
   const lastSavedLabelsRef = React.useRef({});
+
+  // Types de mini jeux disponibles
+  const miniJeuTypes = [
+    { value: 'QCM_Multi', label: 'QCM Multi (Plusieurs réponses)', icon: '☑️' },
+    { value: 'QCM_unique', label: 'QCM Unique (Une seule réponse)', icon: '☐' },
+    { value: 'QCM_calcul', label: 'QCM Calcul', icon: '🔢' },
+    { value: 'Texte_a_trou', label: 'Texte à trou', icon: '📝' },
+    { value: 'Ordre', label: 'Ordre', icon: '🔢' },
+    { value: 'Ordre_groupe', label: 'Ordre par groupe', icon: '📋' },
+    { value: 'Associer', label: 'Associer', icon: '🔗' },
+    { value: 'Question_ouverte', label: 'Question ouverte', icon: '💬' },
+  ];
 
   // Charger les niveaux depuis le backend au chargement
   useEffect(() => {
@@ -162,6 +177,10 @@ export default function Tabs() {
           id: c.id,
           label: c.titre,
           content: c.contenu || "",
+          paragraphes: [],
+          moduleValidations: [],
+          miniJeux: [],
+          exercices: [],
         }));
 
         setTabs((prevTabs) =>
@@ -194,6 +213,67 @@ export default function Tabs() {
     loadChapitres();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, activeMatiere[activeTab], authToken]);
+
+  // Charger les détails complets du chapitre actif
+  useEffect(() => {
+    const loadChapitreDetails = async () => {
+      if (!activeTab) return;
+      const matiereId = activeMatiere[activeTab];
+      if (!matiereId) return;
+      const chapitreKey = `${activeTab}-${matiereId}`;
+      const chapitreId = activeChapitre[chapitreKey];
+      if (!chapitreId) return;
+
+      try {
+        const res = await fetchWithAuth(
+          `${API_BASE}/api/chapitres/${chapitreId}`,
+          {
+            headers: buildAuthHeaders({}, authToken),
+          }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Mettre à jour le chapitre avec toutes ses données
+        setTabs((prevTabs) =>
+          prevTabs.map((tab) =>
+            tab.id === activeTab
+              ? {
+                  ...tab,
+                  matieres: (tab.matieres || []).map((m) =>
+                    m.id === matiereId
+                      ? {
+                          ...m,
+                          chapitres: (m.chapitres || []).map((c) =>
+                            c.id === chapitreId
+                              ? {
+                                  ...c,
+                                  label: data.titre,
+                                  content: data.contenu || "",
+                                  paragraphes: data.paragraphes || [],
+                                  moduleValidations: data.modules_validation || [],
+                                  miniJeux: data.mini_jeux || [],
+                                  exercices: data.exercices || [],
+                                }
+                              : c
+                          ),
+                        }
+                      : m
+                  ),
+                }
+              : tab
+          )
+        );
+      } catch (e) {
+        console.error("Erreur de chargement des détails du chapitre", e);
+      }
+    };
+
+    if (!authToken) return;
+    
+    loadChapitreDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeMatiere[activeTab], activeChapitre, authToken]);
 
   const handleAddTab = async () => {
     const defaultLabel = `Niveau ${nextId}`;
@@ -678,6 +758,28 @@ export default function Tabs() {
     );
   };
 
+  const saveChapitreContent = async (niveauId, matiereId, chapitreId) => {
+    const tab = tabs.find((t) => t.id === niveauId);
+    if (!tab || !tab.matieres) return;
+    const matiere = tab.matieres.find((m) => m.id === matiereId);
+    if (!matiere || !matiere.chapitres) return;
+    const chapitre = matiere.chapitres.find((c) => c.id === chapitreId);
+    if (!chapitre) return;
+
+    try {
+      await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        method: "PUT",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({
+          titre: chapitre.label || "",
+          contenu: chapitre.content || "",
+        }),
+      });
+    } catch (e) {
+      console.error("Erreur réseau lors de la mise à jour du contenu du chapitre", e);
+    }
+  };
+
   const handleDeleteChapitre = (niveauId, matiereId, chapitreId, e) => {
     e.stopPropagation();
     const tab = tabs.find(t => t.id === niveauId);
@@ -738,6 +840,823 @@ export default function Tabs() {
       },
       onCancel: () => setConfirmModal(null)
     });
+  };
+
+  // Handlers pour Paragraphes
+  const handleAddParagraphe = async (chapitreId) => {
+    if (!chapitreId) return;
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/paragraphes`, {
+        method: "POST",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({
+          contenu: "Nouveau paragraphe",
+          chapitre_id: chapitreId,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Erreur lors de la création du paragraphe");
+        return;
+      }
+      const created = await res.json();
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la création du paragraphe", e);
+    }
+  };
+
+  const handleUpdateParagraphe = async (paragrapheId, newContenu) => {
+    try {
+      await fetchWithAuth(`${API_BASE}/api/paragraphes/${paragrapheId}`, {
+        method: "PUT",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({ contenu: newContenu }),
+      });
+    } catch (e) {
+      console.error("Erreur réseau lors de la mise à jour du paragraphe", e);
+    }
+  };
+
+  const handleDeleteParagraphe = async (paragrapheId, chapitreId) => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/paragraphes/${paragrapheId}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (!res.ok) return;
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la suppression du paragraphe", e);
+    }
+  };
+
+  // Handlers pour Module Validation
+  const handleAddModuleValidation = async (chapitreId) => {
+    if (!chapitreId) return;
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/module-validations`, {
+        method: "POST",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({
+          contenu: "Nouveau module de validation",
+          chapitre_id: chapitreId,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Erreur lors de la création du module de validation");
+        return;
+      }
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la création du module de validation", e);
+    }
+  };
+
+  const handleUpdateModuleValidation = async (moduleId, newContenu) => {
+    try {
+      await fetchWithAuth(`${API_BASE}/api/module-validations/${moduleId}`, {
+        method: "PUT",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({ contenu: newContenu }),
+      });
+    } catch (e) {
+      console.error("Erreur réseau lors de la mise à jour du module de validation", e);
+    }
+  };
+
+  const handleDeleteModuleValidation = async (moduleId, chapitreId) => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/module-validations/${moduleId}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (!res.ok) return;
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la suppression du module de validation", e);
+    }
+  };
+
+  // Handlers pour Mini Jeux
+  const handleSelectMiniJeuType = (chapitreId, gameType) => {
+    // Fermer le modal de sélection et ouvrir la prévisualisation
+    setMiniJeuTypeModal(null);
+    // Initialiser les données par défaut selon le type
+    const defaultData = {
+      question: "",
+      type: gameType,
+      reponses: [], // Liste unique de réponses avec {text: "", isGood: false}
+      reponse: "", // Pour QCM_unique uniquement
+      formule: "",
+      texte: "",
+      distracteur: [],
+      consigne: "",
+      liste: [],
+    };
+    setMiniJeuData(defaultData);
+    setPreviewModal({ chapitreId, gameType });
+  };
+
+  const handleAddMiniJeu = async (chapitreId, gameType) => {
+    if (!chapitreId || !gameType) return;
+    
+    // Validation : la question est obligatoire
+    if (!miniJeuData.question || miniJeuData.question.trim() === "") {
+      alert("Veuillez saisir une question");
+      return;
+    }
+    
+    try {
+      const payload = {
+        type: gameType,
+        question: miniJeuData.question,
+        chapitre_id: chapitreId,
+      };
+      
+      // Ajouter les données spécifiques selon le type
+      if (gameType === 'QCM_Multi' || gameType === 'QCM_unique') {
+        // Convertir la liste de réponses avec checkboxes en bonnes/mauvaises réponses
+        if (Array.isArray(miniJeuData.reponses) && miniJeuData.reponses.length > 0) {
+          const bonnes = miniJeuData.reponses
+            .filter(r => r && r.text && r.text.trim() && r.isGood)
+            .map(r => r.text.trim());
+          const mauvaises = miniJeuData.reponses
+            .filter(r => r && r.text && r.text.trim() && !r.isGood)
+            .map(r => r.text.trim());
+          
+          if (bonnes.length > 0) {
+            payload.bonnes_reponses = bonnes.join(';');
+          }
+          if (mauvaises.length > 0) {
+            payload.mauvaises_reponses = mauvaises.join(';');
+          }
+        } else {
+          // Fallback pour compatibilité avec l'ancien format
+          if (Array.isArray(miniJeuData.bonnesReponses) && miniJeuData.bonnesReponses.length > 0) {
+            payload.bonnes_reponses = miniJeuData.bonnesReponses.filter(r => r && r.trim()).join(';');
+          } else if (typeof miniJeuData.bonnesReponses === 'string' && miniJeuData.bonnesReponses) {
+            payload.bonnes_reponses = miniJeuData.bonnesReponses;
+          }
+          if (Array.isArray(miniJeuData.mauvaisesReponses) && miniJeuData.mauvaisesReponses.length > 0) {
+            payload.mauvaises_reponses = miniJeuData.mauvaisesReponses.filter(r => r && r.trim()).join(';');
+          } else if (typeof miniJeuData.mauvaisesReponses === 'string' && miniJeuData.mauvaisesReponses) {
+            payload.mauvaises_reponses = miniJeuData.mauvaisesReponses;
+          }
+        }
+        if (gameType === 'QCM_unique' && miniJeuData.reponse) payload.reponse = miniJeuData.reponse;
+      } else if (gameType === 'QCM_calcul') {
+        if (miniJeuData.formule) payload.formule = miniJeuData.formule;
+        if (miniJeuData.fausseReponse) payload.fausse_reponse = miniJeuData.fausseReponse;
+      } else if (gameType === 'Texte_a_trou') {
+        if (miniJeuData.texte) payload.texte = miniJeuData.texte;
+        if (miniJeuData.distracteur) payload.distracteur = miniJeuData.distracteur;
+      } else if (gameType === 'Ordre' || gameType === 'Ordre_groupe') {
+        if (miniJeuData.consigne) payload.consigne = miniJeuData.consigne;
+        if (miniJeuData.liste) payload.liste = miniJeuData.liste;
+      } else if (gameType === 'Question_ouverte') {
+        if (miniJeuData.reponses) payload.reponses = miniJeuData.reponses;
+      }
+      
+      const res = await fetchWithAuth(`${API_BASE}/api/mini-jeux`, {
+        method: "POST",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        console.error("Erreur lors de la création du mini jeu");
+        return;
+      }
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+      
+      // Fermer le modal de prévisualisation et réinitialiser les données
+      setPreviewModal(null);
+      setMiniJeuData({});
+    } catch (e) {
+      console.error("Erreur réseau lors de la création du mini jeu", e);
+    }
+  };
+
+  // Fonction pour rendre la prévisualisation selon le type (éditable)
+  const renderPreview = (gameType) => {
+    const updateData = (field, value) => {
+      setMiniJeuData(prev => ({ ...prev, [field]: value }));
+    };
+    
+    switch (gameType) {
+      case 'QCM_Multi':
+        // S'assurer que reponses est un tableau d'objets {text, isGood}
+        const reponsesArrayMulti = Array.isArray(miniJeuData.reponses) 
+          ? miniJeuData.reponses 
+          : [];
+        
+        const addReponseMulti = () => {
+          setMiniJeuData(prev => ({
+            ...prev,
+            reponses: [...(Array.isArray(prev.reponses) ? prev.reponses : []), { text: "", isGood: false }]
+          }));
+        };
+        
+        const removeReponseMulti = (index) => {
+          setMiniJeuData(prev => ({
+            ...prev,
+            reponses: (Array.isArray(prev.reponses) ? prev.reponses : []).filter((_, i) => i !== index)
+          }));
+        };
+        
+        const updateReponseMulti = (index, value) => {
+          setMiniJeuData(prev => {
+            const arr = Array.isArray(prev.reponses) ? [...prev.reponses] : [];
+            arr[index] = { ...arr[index], text: value };
+            return { ...prev, reponses: arr };
+          });
+        };
+        
+        const toggleReponseMulti = (index) => {
+          setMiniJeuData(prev => {
+            const arr = Array.isArray(prev.reponses) ? [...prev.reponses] : [];
+            arr[index] = { ...arr[index], isGood: !arr[index].isGood };
+            return { ...prev, reponses: arr };
+          });
+        };
+        
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-semibold text-gray-700">Réponses (cochez les bonnes) :</label>
+                  <button
+                    type="button"
+                    onClick={addReponseMulti}
+                    className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                  >
+                    + Ajouter
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {reponsesArrayMulti.map((reponse, index) => (
+                    <div key={`reponse-${index}`} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={reponse.isGood || false}
+                        onChange={() => toggleReponseMulti(index)}
+                        className="w-4 h-4 text-blue-600"
+                        title="Cocher si c'est une bonne réponse"
+                      />
+                      <input
+                        type="text"
+                        value={reponse.text || ""}
+                        onChange={(e) => updateReponseMulti(index, e.target.value)}
+                        className="flex-1 p-2 border border-gray-300 rounded bg-white text-black"
+                        style={{ color: '#000000' }}
+                        placeholder={`Réponse ${index + 1}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeReponseMulti(index)}
+                        className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  {reponsesArrayMulti.length === 0 && (
+                    <p className="text-xs text-gray-500 italic">Aucune réponse. Cliquez sur "+ Ajouter" pour en ajouter.</p>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2 mt-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Aperçu :</p>
+                {reponsesArrayMulti.filter(r => r && r.text && r.text.trim()).map((r, i) => (
+                  <label key={`preview-${i}`} className={`flex items-center gap-2 p-2 rounded border ${r.isGood ? 'bg-green-50 border-green-300' : 'bg-white border-gray-300'}`}>
+                    <input type="checkbox" className="w-4 h-4 text-blue-600" checked={r.isGood || false} disabled />
+                    <span>{r.text.trim()}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'QCM_unique':
+        // S'assurer que reponses est un tableau d'objets {text, isGood}
+        const reponsesArrayUnique = Array.isArray(miniJeuData.reponses) 
+          ? miniJeuData.reponses 
+          : [];
+        
+        const addReponseUnique = () => {
+          setMiniJeuData(prev => ({
+            ...prev,
+            reponses: [...(Array.isArray(prev.reponses) ? prev.reponses : []), { text: "", isGood: false }]
+          }));
+        };
+        
+        const removeReponseUnique = (index) => {
+          setMiniJeuData(prev => ({
+            ...prev,
+            reponses: (Array.isArray(prev.reponses) ? prev.reponses : []).filter((_, i) => i !== index)
+          }));
+        };
+        
+        const updateReponseUnique = (index, value) => {
+          setMiniJeuData(prev => {
+            const arr = Array.isArray(prev.reponses) ? [...prev.reponses] : [];
+            arr[index] = { ...arr[index], text: value };
+            return { ...prev, reponses: arr };
+          });
+        };
+        
+        const toggleReponseUnique = (index) => {
+          setMiniJeuData(prev => {
+            const arr = Array.isArray(prev.reponses) ? [...prev.reponses] : [];
+            // Pour QCM_unique, une seule réponse peut être bonne
+            // Si on coche une réponse, décocher toutes les autres
+            arr.forEach((r, i) => {
+              if (i === index) {
+                arr[i] = { ...r, isGood: !r.isGood };
+              } else {
+                arr[i] = { ...r, isGood: false };
+              }
+            });
+            return { ...prev, reponses: arr };
+          });
+        };
+        
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-semibold text-gray-700">Réponses (cochez la bonne) :</label>
+                  <button
+                    type="button"
+                    onClick={addReponseUnique}
+                    className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                  >
+                    + Ajouter
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {reponsesArrayUnique.map((reponse, index) => (
+                    <div key={`reponse-unique-${index}`} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="qcm_unique_reponse"
+                        checked={reponse.isGood || false}
+                        onChange={() => toggleReponseUnique(index)}
+                        className="w-4 h-4 text-blue-600"
+                        title="Cocher si c'est la bonne réponse"
+                      />
+                      <input
+                        type="text"
+                        value={reponse.text || ""}
+                        onChange={(e) => updateReponseUnique(index, e.target.value)}
+                        className="flex-1 p-2 border border-gray-300 rounded bg-white text-black"
+                        style={{ color: '#000000' }}
+                        placeholder={`Réponse ${index + 1}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeReponseUnique(index)}
+                        className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  {reponsesArrayUnique.length === 0 && (
+                    <p className="text-xs text-gray-500 italic">Aucune réponse. Cliquez sur "+ Ajouter" pour en ajouter.</p>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2 mt-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Aperçu :</p>
+                {reponsesArrayUnique.filter(r => r && r.text && r.text.trim()).map((r, i) => (
+                  <label key={`preview-unique-${i}`} className={`flex items-center gap-2 p-2 rounded border ${r.isGood ? 'bg-green-50 border-green-300' : 'bg-white border-gray-300'}`}>
+                    <input type="radio" name="qcm_unique_preview" className="w-4 h-4 text-blue-600" checked={r.isGood || false} disabled />
+                    <span>{r.text.trim()}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'QCM_calcul':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question de calcul..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Formule :</label>
+                <input
+                  type="text"
+                  value={miniJeuData.formule || ""}
+                  onChange={(e) => updateData('formule', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Ex: 2 + 2"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Fausse réponse :</label>
+                <input
+                  type="text"
+                  value={miniJeuData.fausseReponse || ""}
+                  onChange={(e) => updateData('fausseReponse', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Ex: 3"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'Texte_a_trou':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Texte avec trous :</label>
+                <textarea
+                  value={miniJeuData.texte || ""}
+                  onChange={(e) => updateData('texte', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Le [mot] est un animal."
+                  rows="3"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Distracteurs (séparés par ;) :</label>
+                <textarea
+                  value={miniJeuData.distracteur || ""}
+                  onChange={(e) => updateData('distracteur', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="chien; oiseau; poisson"
+                  rows="2"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'Ordre':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Consigne :</label>
+                <textarea
+                  value={miniJeuData.consigne || ""}
+                  onChange={(e) => updateData('consigne', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Remettez les éléments dans le bon ordre"
+                  rows="2"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Liste d'éléments (séparés par ;) :</label>
+                <textarea
+                  value={miniJeuData.liste || ""}
+                  onChange={(e) => updateData('liste', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Élément 1; Élément 2; Élément 3"
+                  rows="3"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'Ordre_groupe':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Consigne :</label>
+                <textarea
+                  value={miniJeuData.consigne || ""}
+                  onChange={(e) => updateData('consigne', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Organisez les éléments par groupes"
+                  rows="2"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Liste par groupe (JSON) :</label>
+                <textarea
+                  value={miniJeuData.liste || ""}
+                  onChange={(e) => updateData('liste', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black font-mono text-sm"
+                  style={{ color: '#000000' }}
+                  placeholder='{"groupe1": ["élément1", "élément2"], "groupe2": ["élément3", "élément4"]}'
+                  rows="4"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'Associer':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Propositions (JSON) :</label>
+                <textarea
+                  value={miniJeuData.propositions || ""}
+                  onChange={(e) => updateData('propositions', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black font-mono text-sm"
+                  style={{ color: '#000000' }}
+                  placeholder='[{"colonne1": "A", "colonne2": "1"}, {"colonne1": "B", "colonne2": "2"}]'
+                  rows="4"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'Question_ouverte':
+        return (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+              <label className="block font-bold text-blue-900 mb-2">Question :</label>
+              <textarea
+                value={miniJeuData.question || ""}
+                onChange={(e) => updateData('question', e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded bg-white text-black mb-4"
+                style={{ color: '#000000' }}
+                placeholder="Saisissez votre question..."
+                rows="2"
+              />
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Réponses acceptées (séparées par ;) :</label>
+                <textarea
+                  value={miniJeuData.reponses || ""}
+                  onChange={(e) => updateData('reponses', e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-black"
+                  style={{ color: '#000000' }}
+                  placeholder="Réponse 1; Réponse 2; Réponse 3"
+                  rows="3"
+                />
+              </div>
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Aperçu :</p>
+                <textarea 
+                  className="w-full p-3 border border-gray-300 rounded bg-white"
+                  placeholder="Tapez votre réponse ici..."
+                  rows="4"
+                  disabled
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      default:
+        return (
+          <div className="text-center text-gray-500 p-8">
+            Aperçu non disponible pour ce type de jeu
+          </div>
+        );
+    }
+  };
+
+  const handleUpdateMiniJeu = async (miniJeuId, updates) => {
+    try {
+      await fetchWithAuth(`${API_BASE}/api/mini-jeux/${miniJeuId}`, {
+        method: "PUT",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify(updates),
+      });
+    } catch (e) {
+      console.error("Erreur réseau lors de la mise à jour du mini jeu", e);
+    }
+  };
+
+  const handleDeleteMiniJeu = async (miniJeuId, chapitreId) => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/mini-jeux/${miniJeuId}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (!res.ok) return;
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la suppression du mini jeu", e);
+    }
+  };
+
+  // Handlers pour Exercices
+  const handleAddExercice = async (chapitreId) => {
+    if (!chapitreId) return;
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/exercices`, {
+        method: "POST",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({
+          contenu: "Nouvel exercice",
+          chapitre_id: chapitreId,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Erreur lors de la création de l'exercice");
+        return;
+      }
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la création de l'exercice", e);
+    }
+  };
+
+  const handleUpdateExercice = async (exerciceId, newContenu) => {
+    try {
+      await fetchWithAuth(`${API_BASE}/api/exercices/${exerciceId}`, {
+        method: "PUT",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }, authToken),
+        body: JSON.stringify({ contenu: newContenu }),
+      });
+    } catch (e) {
+      console.error("Erreur réseau lors de la mise à jour de l'exercice", e);
+    }
+  };
+
+  const handleDeleteExercice = async (exerciceId, chapitreId) => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/api/exercices/${exerciceId}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (!res.ok) return;
+      
+      // Recharger les détails du chapitre
+      const chapitreRes = await fetchWithAuth(`${API_BASE}/api/chapitres/${chapitreId}`, {
+        headers: buildAuthHeaders({}, authToken),
+      });
+      if (chapitreRes.ok) {
+        const chapitreData = await chapitreRes.json();
+        updateChapitreInState(chapitreId, chapitreData);
+      }
+    } catch (e) {
+      console.error("Erreur réseau lors de la suppression de l'exercice", e);
+    }
+  };
+
+  // Helper pour mettre à jour le chapitre dans le state
+  const updateChapitreInState = (chapitreId, chapitreData) => {
+    setTabs((prevTabs) =>
+      prevTabs.map((tab) =>
+        tab.id === activeTab
+          ? {
+              ...tab,
+              matieres: (tab.matieres || []).map((m) =>
+                m.id === activeMatiereId
+                  ? {
+                      ...m,
+                      chapitres: (m.chapitres || []).map((c) =>
+                        c.id === chapitreId
+                          ? {
+                              ...c,
+                              label: chapitreData.titre,
+                              content: chapitreData.contenu || "",
+                              paragraphes: chapitreData.paragraphes || [],
+                              moduleValidations: chapitreData.modules_validation || [],
+                              miniJeux: chapitreData.mini_jeux || [],
+                              exercices: chapitreData.exercices || [],
+                            }
+                          : c
+                      ),
+                    }
+                  : m
+              ),
+            }
+          : tab
+      )
+    );
   };
 
   const activeTabData = tabs.find((tab) => tab.id === activeTab);
@@ -1192,7 +2111,7 @@ export default function Tabs() {
                         )}
                         
                         {/* Zone d'édition du contenu */}
-                        <div>
+                        <div className="mb-6">
                           <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
                             Contenu du chapitre
                           </label>
@@ -1201,6 +2120,7 @@ export default function Tabs() {
                             onChange={(e) =>
                               handleChapitreContentChange(activeTab, activeMatiereId, activeChapitreData.id, e.target.value)
                             }
+                            onBlur={() => saveChapitreContent(activeTab, activeMatiereId, activeChapitreData.id)}
                             className="w-full border-2 border-gray-200 bg-white rounded-lg p-4 sm:p-5 md:p-6 text-sm sm:text-base md:text-lg text-gray-700 resize-y outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100 transition-all min-h-[200px] sm:min-h-[250px] md:min-h-[300px] shadow-sm hover:border-gray-300 font-sans leading-relaxed"
                             placeholder="Saisissez le contenu de ce chapitre... Vous pouvez utiliser plusieurs lignes pour organiser votre texte."
                             rows="8"
@@ -1211,6 +2131,259 @@ export default function Tabs() {
                           <p className="mt-2 text-xs text-gray-500">
                             {activeChapitreData.content?.length || 0} caractères
                           </p>
+                        </div>
+
+                        {/* Section Paragraphes */}
+                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <label className="block text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                              📄 Paragraphes
+                            </label>
+                            <button
+                              onClick={() => handleAddParagraphe(activeChapitreData.id)}
+                              className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                            >
+                              + Ajouter
+                            </button>
+                          </div>
+                          {activeChapitreData.paragraphes && activeChapitreData.paragraphes.length > 0 ? (
+                            <div className="space-y-2">
+                              {activeChapitreData.paragraphes.map((para, idx) => (
+                                <div key={para.id || idx} className="bg-white p-3 rounded border border-blue-200 flex items-start gap-2">
+                                  <textarea
+                                    value={para.contenu || ""}
+                                    onChange={(e) => {
+                                      const newContenu = e.target.value;
+                                      setTabs((prevTabs) =>
+                                        prevTabs.map((tab) =>
+                                          tab.id === activeTab
+                                            ? {
+                                                ...tab,
+                                                matieres: (tab.matieres || []).map((m) =>
+                                                  m.id === activeMatiereId
+                                                    ? {
+                                                        ...m,
+                                                        chapitres: (m.chapitres || []).map((c) =>
+                                                          c.id === activeChapitreData.id
+                                                            ? {
+                                                                ...c,
+                                                                paragraphes: (c.paragraphes || []).map((p) =>
+                                                                  p.id === para.id ? { ...p, contenu: newContenu } : p
+                                                                ),
+                                                              }
+                                                            : c
+                                                        ),
+                                                      }
+                                                    : m
+                                                ),
+                                              }
+                                            : tab
+                                        )
+                                      );
+                                    }}
+                                    onBlur={() => handleUpdateParagraphe(para.id, para.contenu)}
+                                    className="flex-1 border border-gray-200 rounded p-2 text-sm"
+                                    placeholder="Contenu du paragraphe..."
+                                    rows="3"
+                                  />
+                                  <button
+                                    onClick={() => handleDeleteParagraphe(para.id, activeChapitreData.id)}
+                                    className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 mt-1"
+                                    title="Supprimer"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">Aucun paragraphe pour le moment</p>
+                          )}
+                        </div>
+
+                        {/* Section Module Validation */}
+                        <div className="mb-6 p-4 bg-yellow-50 rounded-lg border-2 border-yellow-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <label className="block text-xs font-semibold text-yellow-700 uppercase tracking-wide">
+                              ✅ Module de Validation
+                            </label>
+                            <button
+                              onClick={() => handleAddModuleValidation(activeChapitreData.id)}
+                              className="px-3 py-1 bg-yellow-600 text-white text-xs rounded hover:bg-yellow-700"
+                            >
+                              + Ajouter
+                            </button>
+                          </div>
+                          {activeChapitreData.moduleValidations && activeChapitreData.moduleValidations.length > 0 ? (
+                            <div className="space-y-3">
+                              {activeChapitreData.moduleValidations.map((module, idx) => (
+                                <div key={module.id || idx} className="bg-white p-4 rounded border border-yellow-200">
+                                  <div className="flex items-start gap-2 mb-3">
+                                    <textarea
+                                      value={module.contenu || ""}
+                                      onChange={(e) => {
+                                        const newContenu = e.target.value;
+                                        setTabs((prevTabs) =>
+                                          prevTabs.map((tab) =>
+                                            tab.id === activeTab
+                                              ? {
+                                                  ...tab,
+                                                  matieres: (tab.matieres || []).map((m) =>
+                                                    m.id === activeMatiereId
+                                                      ? {
+                                                          ...m,
+                                                          chapitres: (m.chapitres || []).map((c) =>
+                                                            c.id === activeChapitreData.id
+                                                              ? {
+                                                                  ...c,
+                                                                  moduleValidations: (c.moduleValidations || []).map((mod) =>
+                                                                    mod.id === module.id ? { ...mod, contenu: newContenu } : mod
+                                                                  ),
+                                                                }
+                                                              : c
+                                                          ),
+                                                        }
+                                                      : m
+                                                  ),
+                                                }
+                                              : tab
+                                          )
+                                        );
+                                      }}
+                                      onBlur={() => handleUpdateModuleValidation(module.id, module.contenu)}
+                                      className="flex-1 border border-gray-200 rounded p-2 text-sm"
+                                      placeholder="Contenu du module de validation..."
+                                      rows="2"
+                                    />
+                                    <button
+                                      onClick={() => handleDeleteModuleValidation(module.id, activeChapitreData.id)}
+                                      className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                                      title="Supprimer"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                  <div className="text-xs text-gray-600 space-y-1">
+                                    <p>🎬 Animations maison: {module.animations_maison_count || 0}</p>
+                                    <p>🎮 Mini jeux: {module.mini_jeux_count || 0}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">Aucun module de validation pour le moment</p>
+                          )}
+                        </div>
+
+                        {/* Section Mini Jeux */}
+                        <div className="mb-6 p-4 bg-green-50 rounded-lg border-2 border-green-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <label className="block text-xs font-semibold text-green-700 uppercase tracking-wide">
+                              🎮 Mini Jeux
+                            </label>
+                            <button
+                              onClick={() => setMiniJeuTypeModal({ chapitreId: activeChapitreData.id })}
+                              className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700"
+                            >
+                              + Ajouter
+                            </button>
+                          </div>
+                          {activeChapitreData.miniJeux && activeChapitreData.miniJeux.length > 0 ? (
+                            <div className="space-y-2">
+                              {activeChapitreData.miniJeux.map((jeu, idx) => (
+                                <div key={jeu.id || idx} className="bg-white p-3 rounded border border-green-200">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="text-xs font-semibold text-green-700">Type: {jeu.type || 'N/A'}</span>
+                                    <button
+                                      onClick={() => handleDeleteMiniJeu(jeu.id, activeChapitreData.id)}
+                                      className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                                      title="Supprimer"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                  {jeu.question && (
+                                    <p className="text-sm text-gray-700 mb-1">Question: {jeu.question}</p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">Aucun mini jeu pour le moment</p>
+                          )}
+                        </div>
+
+                        {/* Section Exercices */}
+                        <div className="mb-6 p-4 bg-purple-50 rounded-lg border-2 border-purple-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <label className="block text-xs font-semibold text-purple-700 uppercase tracking-wide">
+                              📝 Exercices
+                            </label>
+                            <button
+                              onClick={() => handleAddExercice(activeChapitreData.id)}
+                              className="px-3 py-1 bg-purple-600 text-white text-xs rounded hover:bg-purple-700"
+                            >
+                              + Ajouter
+                            </button>
+                          </div>
+                          {activeChapitreData.exercices && activeChapitreData.exercices.length > 0 ? (
+                            <div className="space-y-3">
+                              {activeChapitreData.exercices.map((exercice, idx) => (
+                                <div key={exercice.id || idx} className="bg-white p-4 rounded border border-purple-200">
+                                  <div className="flex items-start gap-2 mb-3">
+                                    <textarea
+                                      value={exercice.contenu || ""}
+                                      onChange={(e) => {
+                                        const newContenu = e.target.value;
+                                        setTabs((prevTabs) =>
+                                          prevTabs.map((tab) =>
+                                            tab.id === activeTab
+                                              ? {
+                                                  ...tab,
+                                                  matieres: (tab.matieres || []).map((m) =>
+                                                    m.id === activeMatiereId
+                                                      ? {
+                                                          ...m,
+                                                          chapitres: (m.chapitres || []).map((c) =>
+                                                            c.id === activeChapitreData.id
+                                                              ? {
+                                                                  ...c,
+                                                                  exercices: (c.exercices || []).map((ex) =>
+                                                                    ex.id === exercice.id ? { ...ex, contenu: newContenu } : ex
+                                                                  ),
+                                                                }
+                                                              : c
+                                                          ),
+                                                        }
+                                                      : m
+                                                  ),
+                                                }
+                                              : tab
+                                          )
+                                        );
+                                      }}
+                                      onBlur={() => handleUpdateExercice(exercice.id, exercice.contenu)}
+                                      className="flex-1 border border-gray-200 rounded p-2 text-sm"
+                                      placeholder="Contenu de l'exercice..."
+                                      rows="2"
+                                    />
+                                    <button
+                                      onClick={() => handleDeleteExercice(exercice.id, activeChapitreData.id)}
+                                      className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                                      title="Supprimer"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <p>❓ Questions/Réponses: {exercice.questions_reponses_count || 0}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">Aucun exercice pour le moment</p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1327,6 +2500,129 @@ export default function Tabs() {
                 }`}
               >
                 {confirmModal.type === 'error' ? 'OK' : 'Supprimer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de sélection du type de mini jeu */}
+      {miniJeuTypeModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm"
+          onClick={() => setMiniJeuTypeModal(null)}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-2xl max-w-2xl w-full mx-4 transform transition-all max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b bg-green-50 border-green-200">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-green-900">
+                  🎮 Choisir le type de mini jeu
+                </h3>
+                <button
+                  onClick={() => setMiniJeuTypeModal(null)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            
+            {/* Body - Liste des types */}
+            <div className="px-6 py-4">
+              <p className="text-gray-600 text-sm mb-4">
+                Sélectionnez le type de mini jeu que vous souhaitez ajouter à ce chapitre :
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {miniJeuTypes.map((gameType) => (
+                  <button
+                    key={gameType.value}
+                    onClick={() => handleSelectMiniJeuType(miniJeuTypeModal.chapitreId, gameType.value)}
+                    className="p-4 border-2 border-green-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all text-left group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">{gameType.icon}</span>
+                      <div>
+                        <div className="font-semibold text-green-900 group-hover:text-green-700">
+                          {gameType.label}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {gameType.value}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="px-6 py-4 border-t bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setMiniJeuTypeModal(null)}
+                className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de prévisualisation du mini jeu */}
+      {previewModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm"
+          onClick={() => setPreviewModal(null)}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-2xl max-w-3xl w-full mx-4 transform transition-all max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b bg-blue-50 border-blue-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-blue-900">
+                    👁️ Aperçu - {miniJeuTypes.find(gt => gt.value === previewModal.gameType)?.label || previewModal.gameType}
+                  </h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Voici comment ce mini jeu apparaîtra pour les utilisateurs
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPreviewModal(null)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            
+            {/* Body - Prévisualisation */}
+            <div className="px-6 py-6">
+              <div className="bg-gray-50 p-4 rounded-lg border-2 border-dashed border-gray-300 mb-4">
+                <p className="text-xs text-gray-500 uppercase font-semibold mb-2">Simulation utilisateur</p>
+                {renderPreview(previewModal.gameType)}
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="px-6 py-4 border-t bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => setPreviewModal(null)}
+                className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => handleAddMiniJeu(previewModal.chapitreId, previewModal.gameType)}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+              >
+                ✓ Créer ce mini jeu
               </button>
             </div>
           </div>

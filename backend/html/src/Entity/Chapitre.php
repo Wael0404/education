@@ -2,6 +2,8 @@
 
 namespace App\Entity;
 
+use Doctrine\Common\Collections\ArrayCollection;
+use Doctrine\Common\Collections\Collection;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -27,6 +29,18 @@ class Chapitre
     #[ORM\JoinColumn(name: 'matiere_id', referencedColumnName: 'id', nullable: false)]
     private Matiere $matiere;
 
+    #[ORM\OneToMany(targetEntity: Paragraphe::class, mappedBy: 'chapitre', cascade: ['persist', 'remove'])]
+    private Collection $paragraphes;
+
+    #[ORM\OneToMany(targetEntity: ModuleValidation::class, mappedBy: 'chapitre', cascade: ['persist', 'remove'])]
+    private Collection $modulesValidation;
+
+    #[ORM\OneToMany(targetEntity: MiniJeu::class, mappedBy: 'chapitre', cascade: ['persist', 'remove'])]
+    private Collection $miniJeux;
+
+    #[ORM\OneToMany(targetEntity: Exercice::class, mappedBy: 'chapitre', cascade: ['persist', 'remove'])]
+    private Collection $exercices;
+
     #[ORM\Column(name: 'created_at', type: Types::DATETIME_IMMUTABLE, nullable: true)]
     private ?\DateTimeImmutable $createdAt = null;
 
@@ -35,6 +49,10 @@ class Chapitre
 
     public function __construct()
     {
+        $this->paragraphes = new ArrayCollection();
+        $this->modulesValidation = new ArrayCollection();
+        $this->miniJeux = new ArrayCollection();
+        $this->exercices = new ArrayCollection();
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
     }
@@ -107,6 +125,114 @@ class Chapitre
     public function setUpdatedAt(?\DateTimeImmutable $updatedAt): self
     {
         $this->updatedAt = $updatedAt;
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, Paragraphe>
+     */
+    public function getParagraphes(): Collection
+    {
+        return $this->paragraphes;
+    }
+
+    public function addParagraphe(Paragraphe $paragraphe): self
+    {
+        if (!$this->paragraphes->contains($paragraphe)) {
+            $this->paragraphes->add($paragraphe);
+            $paragraphe->setChapitre($this);
+        }
+        return $this;
+    }
+
+    public function removeParagraphe(Paragraphe $paragraphe): self
+    {
+        if ($this->paragraphes->removeElement($paragraphe)) {
+            if ($paragraphe->getChapitre() === $this) {
+                $paragraphe->setChapitre(null);
+            }
+        }
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, ModuleValidation>
+     */
+    public function getModulesValidation(): Collection
+    {
+        return $this->modulesValidation;
+    }
+
+    public function addModuleValidation(ModuleValidation $moduleValidation): self
+    {
+        if (!$this->modulesValidation->contains($moduleValidation)) {
+            $this->modulesValidation->add($moduleValidation);
+            $moduleValidation->setChapitre($this);
+        }
+        return $this;
+    }
+
+    public function removeModuleValidation(ModuleValidation $moduleValidation): self
+    {
+        if ($this->modulesValidation->removeElement($moduleValidation)) {
+            if ($moduleValidation->getChapitre() === $this) {
+                $moduleValidation->setChapitre(null);
+            }
+        }
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, MiniJeu>
+     */
+    public function getMiniJeux(): Collection
+    {
+        return $this->miniJeux;
+    }
+
+    public function addMiniJeu(MiniJeu $miniJeu): self
+    {
+        if (!$this->miniJeux->contains($miniJeu)) {
+            $this->miniJeux->add($miniJeu);
+            $miniJeu->setChapitre($this);
+        }
+        return $this;
+    }
+
+    public function removeMiniJeu(MiniJeu $miniJeu): self
+    {
+        if ($this->miniJeux->removeElement($miniJeu)) {
+            if ($miniJeu->getChapitre() === $this) {
+                $miniJeu->setChapitre(null);
+            }
+        }
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, Exercice>
+     */
+    public function getExercices(): Collection
+    {
+        return $this->exercices;
+    }
+
+    public function addExercice(Exercice $exercice): self
+    {
+        if (!$this->exercices->contains($exercice)) {
+            $this->exercices->add($exercice);
+            $exercice->setChapitre($this);
+        }
+        return $this;
+    }
+
+    public function removeExercice(Exercice $exercice): self
+    {
+        if ($this->exercices->removeElement($exercice)) {
+            if ($exercice->getChapitre() === $this) {
+                $exercice->setChapitre(null);
+            }
+        }
         return $this;
     }
 }

@@ -116,6 +116,12 @@ class ChapitreController extends AbstractController
             return $this->corsResponse(new JsonResponse(['message' => 'Chapitre non trouvé.'], 404));
         }
 
+        // Charger toutes les relations
+        $paragraphes = $chapitre->getParagraphes()->toArray();
+        $modulesValidation = $chapitre->getModulesValidation()->toArray();
+        $miniJeux = $chapitre->getMiniJeux()->toArray();
+        $exercices = $chapitre->getExercices()->toArray();
+
         return $this->corsResponse(new JsonResponse([
             'id' => $chapitre->getId(),
             'titre' => $chapitre->getTitre(),
@@ -125,6 +131,37 @@ class ChapitreController extends AbstractController
                 'id' => $chapitre->getMatiere()->getId(),
                 'nom' => $chapitre->getMatiere()->getNom(),
             ],
+            'paragraphes' => array_map(function ($paragraphe) {
+                return [
+                    'id' => $paragraphe->getId(),
+                    'contenu' => $paragraphe->getContenu(),
+                    'ordre' => $paragraphe->getOrdre(),
+                ];
+            }, $paragraphes),
+            'modules_validation' => array_map(function ($module) {
+                return [
+                    'id' => $module->getId(),
+                    'contenu' => $module->getContenu(),
+                    'animations_maison_count' => $module->getAnimationsMaison()->count(),
+                    'mini_jeux_count' => $module->getMiniJeux()->count(),
+                ];
+            }, $modulesValidation),
+            'mini_jeux' => array_map(function ($miniJeu) {
+                return [
+                    'id' => $miniJeu->getId(),
+                    'type' => $miniJeu->getType(),
+                    'question' => $miniJeu->getQuestion(),
+                    'ordre' => $miniJeu->getOrdre(),
+                ];
+            }, $miniJeux),
+            'exercices' => array_map(function ($exercice) {
+                return [
+                    'id' => $exercice->getId(),
+                    'contenu' => $exercice->getContenu(),
+                    'ordre' => $exercice->getOrdre(),
+                    'questions_reponses_count' => $exercice->getQuestionsReponses()->count(),
+                ];
+            }, $exercices),
         ], 200));
     }
 
