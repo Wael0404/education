@@ -1,0 +1,98 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: symfony-backend:latest
+    container_name: symfony-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: dev
+      APP_DEBUG: "1"
+      DATABASE_URL: "mysql://symfony_user:symfony_pass@db:3306/symfony_db"
+    # Pas de volume pour le backend pour éviter d'écraser les fichiers Symfony
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  frontend-shell:
+    build:
+      context: ./frontend-shell
+      dockerfile: Dockerfile
+    image: react-frontend-shell:latest
+    container_name: react-frontend-shell
+    restart: unless-stopped
+    volumes:
+      - ./frontend-shell:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+
+  frontend-mfe1:
+    build:
+      context: ./frontend-mfe1
+      dockerfile: Dockerfile
+    image: react-frontend-mfe1:latest
+    container_name: react-frontend-mfe1
+    restart: unless-stopped
+    volumes:
+      - ./frontend-mfe1:/app
+      - /app/node_modules
+    ports:
+      - "3001:3000"
+
+  admin-mfe:
+    build:
+      context: ./admin-mfe
+      dockerfile: Dockerfile
+    image: react-admin-mfe:latest
+    container_name: react-admin-mfe
+    restart: unless-stopped
+    volumes:
+      - ./admin-mfe:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
+    ports:
+      - "3002:3000"
+
+  student-mfe:
+    build:
+      context: ./student-mfe
+      dockerfile: Dockerfile
+    image: react-student-mfe:latest
+    container_name: react-student-mfe
+    restart: unless-stopped
+    volumes:
+      - ./student-mfe:/app
+      - /app/node_modules
+    ports:
+      - "3003:3000"
+
+  redis:
+    image: redis:7-alpine
+    container_name: symfony-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  db:
+    image: mysql:8.0
+    container_name: symfony-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: symfony_db
+      MYSQL_USER: symfony_user
+      MYSQL_PASSWORD: symfony_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:
+
+
